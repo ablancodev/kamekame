@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Kame Kame · Técnicas con gestos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <video id="cam" playsinline muted></video>
+  <canvas id="stage"></canvas>
+
+  <div id="hud" hidden>
+    <header class="top">
+      <div class="logo">KAME<span>·</span>KAME</div>
+      <div class="top-right">
+        <button id="btnSkel" class="chip" title="Mostrar esqueleto (S)">🦴</button>
+        <button id="btnMute" class="chip" title="Sonido (M)">🔊</button>
+        <div class="score"><small>PUNTOS</small><b id="score">0</b></div>
+      </div>
+    </header>
+
+    <div id="status" class="status">Cargando…</div>
+
+    <aside id="panel">
+      <button id="panelHead" class="panel-head">
+        <span>Técnicas</span><span id="panelArrow">▾</span>
+      </button>
+      <ul id="moves"></ul>
+      <div class="keys">Teclas <b>1–6</b> para probar efectos · <b>S</b> esqueleto · <b>M</b> sonido</div>
+    </aside>
+
+    <div id="banner"><div class="big"></div><div class="sub"></div></div>
+  </div>
+
+  <div id="intro">
+    <div class="card">
+      <div class="logo big">KAME<span>·</span>KAME</div>
+      <p class="lead">Enciende la cámara y haz los gestos de técnicas míticas del anime y de Mortal Kombat. ¡El efecto aparecerá sobre ti!</p>
+      <ul class="tips">
+        <li>📏 Ponte a 1,5–2&nbsp;m para que se te vea <b>de cintura para arriba</b> (mejor aún, de rodillas para arriba).</li>
+        <li>💡 Buena luz de frente ayuda mucho a la detección.</li>
+        <li>🔒 Todo se procesa en tu navegador: el vídeo no sale de tu equipo.</li>
+      </ul>
+      <div class="actions">
+        <button id="startBtn" class="btn primary">📷 Encender cámara</button>
+        <button id="noCamBtn" class="btn">Probar sin cámara</button>
+      </div>
+      <p id="introMsg" class="msg"></p>
+    </div>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
