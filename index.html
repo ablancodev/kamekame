@@ -19,7 +19,8 @@
       <div class="top-right">
         <button id="btnSkel" class="chip" title="Mostrar esqueleto (S)">🦴</button>
         <button id="btnMute" class="chip" title="Sonido (M)">🔊</button>
-        <div class="score"><small>PUNTOS</small><b id="score">0</b></div>
+        <div class="score"><small>PUNTOS</small><b>0</b></div>
+        <div class="score" hidden><small>PUNTOS J2</small><b>0</b></div>
       </div>
     </header>
 
@@ -30,7 +31,7 @@
         <span>Técnicas</span><span id="panelArrow">▾</span>
       </button>
       <ul id="moves"></ul>
-      <div class="keys">Teclas <b>1–6</b> para probar efectos · <b>S</b> esqueleto · <b>M</b> sonido</div>
+      <div class="keys">Teclas <b>1–6</b> para probar efectos<span id="keysP2" hidden> (J1) · <b>Q–Y</b> (J2)</span> · <b>S</b> esqueleto · <b>M</b> sonido</div>
     </aside>
 
     <div id="banner"><div class="big"></div><div class="sub"></div></div>
@@ -45,6 +46,10 @@
         <li>💡 Buena luz de frente ayuda mucho a la detección.</li>
         <li>🔒 Todo se procesa en tu navegador: el vídeo no sale de tu equipo.</li>
       </ul>
+      <div id="modePick" class="mode" role="group" aria-label="Número de jugadores">
+        <button class="on" data-players="1">🧍 1 jugador</button>
+        <button data-players="2">🧍🧍 2 jugadores</button>
+      </div>
       <div class="actions">
         <button id="startBtn" class="btn primary">📷 Encender cámara</button>
         <button id="noCamBtn" class="btn">Probar sin cámara</button>

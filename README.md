@@ -15,9 +15,15 @@ La detección de pose usa [MediaPipe Pose Landmarker](https://developers.google.
 | ❄️ | Congelación | Sub-Zero · Mortal Kombat | Cruza los brazos en X delante del pecho y aguanta un instante. |
 | 🌩️ | Rayo de Raiden | Raiden · Mortal Kombat | Levanta un solo brazo por encima de la cabeza (el otro abajo) y aguanta. |
 
+## Modo 2 jugadores
+
+En la pantalla de inicio puedes elegir **1 jugador** o **2 jugadores**. Con dos, el juego detecta a ambas personas y cada una hace sus técnicas y suma sus propios puntos de forma independiente. J1 es quien está a la izquierda y J2 quien está a la derecha; cada uno lleva su etiqueta sobre la cabeza.
+
+Para que funcione bien, tenéis que caber los dos en el plano sin solaparos, así que conviene alejarse algo más de la cámara.
+
 ## Controles
 
-- **1–6**: lanzar cada efecto sin hacer el gesto (útil para probar)
+- **1–6**: lanzar cada efecto sin hacer el gesto (útil para probar). En modo 2 jugadores, **1–6** son para J1 y **Q–Y** para J2
 - **S**: mostrar u ocultar el esqueleto detectado
 - **M**: activar o silenciar el sonido
 

@@ -32,7 +32,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .chip.off { opacity: .45; }
 .score { background: var(--glass); border: 1px solid var(--line); border-radius: 14px; padding: 6px 14px; text-align: right; backdrop-filter: blur(8px); min-width: 110px; }
 .score small { display: block; font-size: 10px; letter-spacing: 2px; color: var(--muted); }
-.score b { font-family: Bangers, Impact, sans-serif; font-size: 28px; color: var(--gold); letter-spacing: 1px; }
+.score b { font-family: Bangers, Impact, sans-serif; font-size: 28px; color: var(--pc, var(--gold)); letter-spacing: 1px; }
+.score[hidden] { display: none; }
 
 .status { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--glass); border: 1px solid var(--line);
   padding: 8px 16px; border-radius: 999px; font-size: 14px; backdrop-filter: blur(8px); white-space: nowrap; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis; }
@@ -80,6 +81,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .lead { font-size: 18px; line-height: 1.5; color: #dfe3f5; margin: 22px 0 18px; }
 .tips { list-style: none; padding: 0; margin: 0 auto 26px; text-align: left; max-width: 520px; display: grid; gap: 8px; }
 .tips li { background: rgba(255,255,255,.06); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font-size: 14.5px; color: #cfd4ea; }
+.mode { display: inline-flex; gap: 4px; padding: 4px; margin: 0 auto 18px; background: rgba(255,255,255,.06); border: 1px solid var(--line); border-radius: 14px; }
+.mode button { border: 0; background: none; border-radius: 10px; padding: 10px 18px; font-weight: 800; font-size: 15px; color: var(--muted); }
+.mode button.on { background: rgba(255,255,255,.14); color: var(--ink); }
 .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 .btn { border: 1px solid var(--line); background: rgba(255,255,255,.08); border-radius: 14px; padding: 14px 22px; font-weight: 800; font-size: 16px; }
 .btn.primary { background: linear-gradient(135deg, #ffd23f, #ff7a1a); color: #1a0d00; border: 0; box-shadow: 0 8px 30px rgba(255,140,0,.45); }
@@ -90,4 +94,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .logo { font-size: 26px; }
   #panel { top: auto; bottom: 64px; left: 16px; right: 16px; width: auto; max-height: 45vh; }
   .status { bottom: 14px; font-size: 13px; }
+  .score { min-width: 0; padding: 4px 10px; }
+  .score b { font-size: 22px; }
 }

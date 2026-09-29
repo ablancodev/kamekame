@@ -195,20 +195,21 @@ function setProgress(id, v) {
   moveEls[id].bar.style.width = (v * 100).toFixed(1) + '%';
 }
 
-const game = { score: 0, combo: 0, lastMoveT: -99, skeleton: false, running: false, shake: 0 };
-function performed(id) {
+const game = { players: 1, skeleton: false, running: false, shake: 0 };
+function performed(pl, id) {
   const m = MOVE[id];
   const now = performance.now() / 1000;
-  game.combo = now - game.lastMoveT < 4 ? game.combo + 1 : 1;
-  game.lastMoveT = now;
-  game.score += m.pts * game.combo;
+  pl.combo = now - pl.lastMoveT < 4 ? pl.combo + 1 : 1;
+  pl.lastMoveT = now;
+  pl.score += m.pts * pl.combo;
   counts[id]++;
-  $('#score').textContent = game.score.toLocaleString('es-ES');
+  pl.scoreEl.textContent = pl.score.toLocaleString('es-ES');
   const el = moveEls[id];
   el.count.textContent = '×' + counts[id];
   el.li.classList.add('done', 'hit');
   setTimeout(() => el.li.classList.remove('hit'), 700);
-  banner(m.shout, m.color, game.combo > 1 ? `COMBO ×${game.combo}  +${m.pts * game.combo}` : `${m.who.split(' · ')[0]}  +${m.pts}`);
+  const who = game.players > 1 ? pl.name + ' · ' : '';
+  banner(m.shout, m.color, who + (pl.combo > 1 ? `COMBO ×${pl.combo}  +${m.pts * pl.combo}` : `${m.who.split(' · ')[0]}  +${m.pts}`));
 }
 function banner(text, color, sub) {
   const b = $('#banner');
@@ -223,20 +224,44 @@ function setStatus(text, cls = '') {
   s.className = 'status ' + cls;
 }
 
+// ============================================================ players
+// Each detected person gets a slot with its own pose, gesture state, SSJ hair, aura mask and score.
+const PLAYER_COLORS = ['#ffcf33', '#4cc3ff'];
+const canvas2d = () => { const c = document.createElement('canvas'); return [c, c.getContext('2d')]; };
+function newGestures() {
+  return {
+    kame: { state: 'idle', charge: 0, pos: { x: 0, y: 0 }, side: 1, lost: 0, cd: 0, voiced: false },
+    genki: { level: 0, pos: { x: 0, y: 0 }, lost: 0, started: false },
+    ssj: { hold: 0, until: 0, start: 0 },
+    spear: { bentT: [-9, -9], cd: 0 },
+    freeze: { hold: 0, cd: 0 },
+    raiden: { hold: 0, cd: 0 },
+  };
+}
+function newPlayer(i) {
+  const [maskCanvas, maskCtx] = canvas2d(), [midCanvas, midCtx] = canvas2d(), [smallCanvas, smallCtx] = canvas2d();
+  return {
+    i, name: 'J' + (i + 1), color: PLAYER_COLORS[i],
+    smooth: null, lastSeen: -1e9, cx: 0.5, P: null, body: null, G: newGestures(),
+    score: 0, combo: 0, lastMoveT: -99, scoreEl: null,
+    wantMask: false, mask: { canvas: maskCanvas, ctx: maskCtx, img: null, mid: midCanvas, midCtx, small: smallCanvas, smallCtx, ready: false, time: 0 },
+    hair: {
+      u: 0, ang: 0, c: null, vel: { x: 0, y: 0 }, lastT: 0,
+      locks: [...HAIR_FRONT, ...HAIR_BACK, ...HAIR_BANGS].map(() => ({ a: 0, v: 0, ph: rand(0, 6.28), f: rand(7, 12) })),
+    },
+  };
+}
+let players = [];
+
 // ============================================================ pose detection
-let landmarker = null, smooth = null, lastSeen = -1e9, lastVideoTime = -1;
-let wantMask = false, maskReady = false, maskTime = 0;
-const maskCanvas = document.createElement('canvas'); const maskCtx = maskCanvas.getContext('2d');
-let maskImg = null;
-const midCanvas = document.createElement('canvas'); const midCtx = midCanvas.getContext('2d');
-const smallCanvas = document.createElement('canvas'); const smallCtx = smallCanvas.getContext('2d');
-const personCanvas = document.createElement('canvas'); const personCtx = personCanvas.getContext('2d');
+let landmarker = null, lastVideoTime = -1;
+const [personCanvas, personCtx] = canvas2d();
 
 async function initPose() {
   const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
   const opts = delegate => ({
     baseOptions: { modelAssetPath: MODEL_URL, delegate },
-    runningMode: 'VIDEO', numPoses: 1, outputSegmentationMasks: true,
+    runningMode: 'VIDEO', numPoses: game.players, outputSegmentationMasks: true,
     minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
   });
   try { landmarker = await PoseLandmarker.createFromOptions(fileset, opts('GPU')); }
@@ -249,41 +274,61 @@ function detect(now) {
   try { landmarker.detectForVideo(video, now, onResult); } catch (e) { console.warn(e); }
 }
 
-function onResult(res) {
-  const lm = res.landmarks && res.landmarks[0];
-  if (!lm) return;
-  const t = performance.now();
-  if (!smooth || t - lastSeen > 400) {
-    smooth = lm.map(p => ({ x: p.x, y: p.y, v: p.visibility ?? 1 }));
-  } else {
-    for (let i = 0; i < lm.length; i++) {
-      const s = smooth[i], p = lm[i];
-      s.x = lerp(s.x, p.x, 0.6); s.y = lerp(s.y, p.y, 0.6); s.v = lerp(s.v, p.visibility ?? 1, 0.5);
-    }
+// Pairs each detection with a player slot. With two people on screen, J1 is always the one on the
+// left; with only one, it keeps the slot whose last position is closest so charges don't jump.
+function assignPlayers(dets, t) {
+  if (players.length === 1) return [[players[0], dets[0]]];
+  if (dets.length >= 2) {
+    dets.sort((a, b) => a.cx - b.cx);
+    return [[players[0], dets[0]], [players[1], dets[1]]];
   }
-  lastSeen = t;
-  const m = res.segmentationMasks && res.segmentationMasks[0];
-  if (wantMask && m) updateMask(m.getAsFloat32Array(), m.width, m.height);
+  const d = dets[0];
+  const recent = players.filter(p => t - p.lastSeen < 1000);
+  const pl = recent.length
+    ? recent.reduce((a, b) => Math.abs(a.cx - d.cx) <= Math.abs(b.cx - d.cx) ? a : b)
+    : players[d.cx < 0.5 ? 0 : 1];
+  return [[pl, d]];
 }
 
-function updateMask(data, w, h) {
-  if (maskCanvas.width !== w || maskCanvas.height !== h) {
-    maskCanvas.width = w; maskCanvas.height = h;
-    maskImg = maskCtx.createImageData(w, h);
-    midCanvas.width = Math.max(1, w >> 2); midCanvas.height = Math.max(1, h >> 2);
-    smallCanvas.width = Math.max(1, w >> 4); smallCanvas.height = Math.max(1, h >> 4);
+function onResult(res) {
+  const all = res.landmarks || [];
+  if (!all.length) return;
+  const t = performance.now();
+  // horizontal center of the shoulders, in mirrored screen space (0 = left)
+  const dets = all.map((lm, k) => ({ lm, k, cx: 1 - (lm[11].x + lm[12].x) / 2 }));
+  for (const [pl, { lm, k, cx }] of assignPlayers(dets, t)) {
+    if (!pl.smooth || t - pl.lastSeen > 400) {
+      pl.smooth = lm.map(p => ({ x: p.x, y: p.y, v: p.visibility ?? 1 }));
+    } else {
+      for (let i = 0; i < lm.length; i++) {
+        const s = pl.smooth[i], p = lm[i];
+        s.x = lerp(s.x, p.x, 0.6); s.y = lerp(s.y, p.y, 0.6); s.v = lerp(s.v, p.visibility ?? 1, 0.5);
+      }
+    }
+    pl.lastSeen = t; pl.cx = cx;
+    const m = res.segmentationMasks && res.segmentationMasks[k];
+    if (pl.wantMask && m) updateMask(pl.mask, m.getAsFloat32Array(), m.width, m.height);
   }
-  const d = maskImg.data;
+}
+
+function updateMask(M, data, w, h) {
+  if (M.canvas.width !== w || M.canvas.height !== h) {
+    M.canvas.width = w; M.canvas.height = h;
+    M.img = M.ctx.createImageData(w, h);
+    M.mid.width = Math.max(1, w >> 2); M.mid.height = Math.max(1, h >> 2);
+    M.small.width = Math.max(1, w >> 4); M.small.height = Math.max(1, h >> 4);
+  }
+  const d = M.img.data;
   for (let i = 0, j = 0; i < data.length; i++, j += 4) {
     d[j] = 255; d[j + 1] = 205; d[j + 2] = 50; d[j + 3] = data[i] * 255;
   }
-  maskCtx.putImageData(maskImg, 0, 0);
-  maskReady = true; maskTime = performance.now();
+  M.ctx.putImageData(M.img, 0, 0);
+  M.ready = true; M.time = performance.now();
 }
 
-function getPose(r) {
-  if (!smooth || performance.now() - lastSeen > 500) return null;
-  return smooth.map(p => ({ x: r.x + (1 - p.x) * r.w, y: r.y + p.y * r.h, v: p.v }));
+function getPose(pl, r) {
+  if (!pl.smooth || performance.now() - pl.lastSeen > 500) return null;
+  return pl.smooth.map(p => ({ x: r.x + (1 - p.x) * r.w, y: r.y + p.y * r.h, v: p.v }));
 }
 
 // ============================================================ particles & effects
@@ -394,8 +439,8 @@ function drawGenki(x, y, r, t) {
 
 // ---------- Kamehameha beam
 class Beam {
-  constructor(power, dir, origin) {
-    this.t = 0; this.p = power; this.dir = dir; this.dur = 1.4 + 1.8 * power;
+  constructor(pl, power, dir, origin) {
+    this.pl = pl; this.t = 0; this.p = power; this.dir = dir; this.dur = 1.4 + 1.8 * power;
     this.o = { ...origin };
   }
   width() {
@@ -406,6 +451,7 @@ class Beam {
   }
   update(dt) {
     this.t += dt;
+    const body = this.pl.body;
     if (body) { this.o.x = lerp(this.o.x, body.hm.x, 0.25); this.o.y = lerp(this.o.y, body.hm.y, 0.25); }
     addShake(5 + 10 * this.p);
     const w = this.width();
@@ -465,11 +511,12 @@ class GenkiThrow {
 
 // ---------- Scorpion spear
 class Spear {
-  constructor(arm, dir) {
-    this.arm = arm; this.dir = dir; this.t = 0; this.tOut = 0.18; this.tHold = 0.5; this.tBack = 0.3;
+  constructor(pl, arm, dir) {
+    const body = pl.body;
+    this.pl = pl; this.arm = arm; this.dir = dir; this.t = 0; this.tOut = 0.18; this.tHold = 0.5; this.tBack = 0.3;
     this.last = body ? { ...(arm ? body.rw : body.lw) } : { x: W / 2, y: H * 0.45 };
   }
-  hand() { if (body) { const w = this.arm ? body.rw : body.lw; if (w.v > 0.3) this.last = { x: w.x, y: w.y }; } return this.last; }
+  hand() { const body = this.pl.body; if (body) { const w = this.arm ? body.rw : body.lw; if (w.v > 0.3) this.last = { x: w.x, y: w.y }; } return this.last; }
   frac() {
     const t = this.t;
     if (t < this.tOut) return easeOut(t / this.tOut);
@@ -573,8 +620,8 @@ class Freeze {
 
 // ---------- Raiden lightning
 class Raiden {
-  constructor(arm) { this.arm = arm; this.t = 0; this.dur = 2.6; this.next = 0; this.bolts = []; this.thunders = 0; this.last = { x: W / 2, y: H * 0.3 }; }
-  hand() { if (body) { const w = this.arm ? body.rw : body.lw; if (w.v > 0.3) this.last = { x: w.x, y: w.y }; } return this.last; }
+  constructor(pl, arm) { this.pl = pl; this.arm = arm; this.t = 0; this.dur = 2.6; this.next = 0; this.bolts = []; this.thunders = 0; this.last = { x: W / 2, y: H * 0.3 }; }
+  hand() { const body = this.pl.body; if (body) { const w = this.arm ? body.rw : body.lw; if (w.v > 0.3) this.last = { x: w.x, y: w.y }; } return this.last; }
   update(dt) {
     this.t += dt;
     const h = this.hand();
@@ -602,6 +649,7 @@ class Raiden {
     for (const b of this.bolts) drawBolt(b, 1.2);
     const h = this.hand();
     glowCircle(h.x, h.y, Math.min(W, H) * 0.1, [[0, 'rgba(255,255,255,0.9)'], [0.4, 'rgba(140,180,255,0.5)'], [1, 'rgba(60,90,255,0)']]);
+    const body = this.pl.body;
     if (body) {
       const P = body.P, ids = [11, 12, 13, 14, 15, 16, 23, 24];
       for (let i = 0; i < 2; i++) {
@@ -614,61 +662,54 @@ class Raiden {
 }
 
 // ============================================================ gestures
-let body = null;
-const G = {
-  kame: { state: 'idle', charge: 0, pos: { x: 0, y: 0 }, side: 1, lost: 0, cd: 0, voiced: false },
-  genki: { level: 0, pos: { x: 0, y: 0 }, lost: 0, started: false },
-  ssj: { hold: 0, until: 0, start: 0 },
-  spear: { bentT: [-9, -9], cd: 0 },
-  freeze: { hold: 0, cd: 0 },
-  raiden: { hold: 0, cd: 0 },
-};
 const genkiR = l => Math.min(W, H) * (0.04 + 0.2 * l);
 
-function fireKame() {
-  const k = G.kame;
-  effects.push(new Beam(k.charge, -k.side, body ? body.hm : k.pos));
+function fireKame(pl) {
+  const k = pl.G.kame;
+  effects.push(new Beam(pl, k.charge, -k.side, pl.body ? pl.body.hm : k.pos));
   flash('180,230,255', 0.5, 0.35); addShake(25);
   sfx.beam(k.charge);
   say(hasVoice('ja') ? '波ーーーっ!' : '¡HAAAAAAA!', hasVoice('ja') ? 'ja-JP' : 'es-ES', 0.9, 0.7, true);
-  performed('kame');
+  performed(pl, 'kame');
   k.state = 'cooldown'; k.cd = 1; k.charge = 0;
 }
-function throwGenki() {
-  const g = G.genki;
+function throwGenki(pl) {
+  const g = pl.G.genki;
   effects.push(new GenkiThrow(g.pos, genkiR(g.level), g.level));
   say('¡Genkidama!', 'es-ES', 1.05, 0.8, true);
-  performed('genki');
+  performed(pl, 'genki');
   g.level = 0; g.started = false; g.lost = 0;
 }
-function activateSSJ() {
-  G.ssj.start = performance.now() / 1000; G.ssj.until = G.ssj.start + 12; G.ssj.hold = 0;
+function activateSSJ(pl) {
+  const s = pl.G.ssj;
+  s.start = performance.now() / 1000; s.until = s.start + 12; s.hold = 0;
   flash('255,220,80', 0.8, 0.6); addShake(35); sfx.boom(); sfx.powerUp();
   say('¡Aaaaaaaaah!', 'es-ES', 0.8, 0.6, true);
-  performed('ssj');
+  performed(pl, 'ssj');
 }
-function fireSpear(arm, dir) {
-  effects.push(new Spear(arm, dir));
+function fireSpear(pl, arm, dir) {
+  effects.push(new Spear(pl, arm, dir));
   sfx.whoosh();
   say('Get over here!', 'en-US', 1.05, 0.5, true);
-  performed('spear');
+  performed(pl, 'spear');
 }
-function triggerFreeze() {
+function triggerFreeze(pl) {
   effects.push(new Freeze());
   flash('220,245,255', 0.6, 0.35); sfx.freeze(); addShake(10);
-  performed('freeze');
+  performed(pl, 'freeze');
 }
-function triggerRaiden(arm) {
-  effects.push(new Raiden(arm));
-  performed('raiden');
+function triggerRaiden(pl, arm) {
+  effects.push(new Raiden(pl, arm));
+  performed(pl, 'raiden');
 }
 
-function updateGestures(dt, now, P) {
+function updateGestures(pl, dt, now) {
+  const P = pl.P, G = pl.G;
   const k = G.kame, g = G.genki, s = G.ssj, sp = G.spear, f = G.freeze, rd = G.raiden;
   sp.cd -= dt; f.cd -= dt; rd.cd -= dt; k.cd -= dt;
   const ssjActive = now < s.until;
 
-  body = null;
+  let body = null;
   if (P) {
     const [ls, rs] = [P[11], P[12]];
     const sw = dist(ls, rs);
@@ -681,6 +722,7 @@ function updateGestures(dt, now, P) {
         angL: angleAt(ls, le, lw), angR: angleAt(rs, re, rw), wOK: lw.v > 0.3 && rw.v > 0.3 };
     }
   }
+  pl.body = body;
 
   if (!body) {
     if (k.state === 'charging') k.state = 'idle';
@@ -705,7 +747,7 @@ function updateGestures(dt, now, P) {
           if (hasVoice('ja')) say('かめ… はめ…', 'ja-JP', 0.6, 0.8, true); else say('Ka... me... ha... me...', 'es-ES', 0.6, 0.8, true);
         }
       } else if (firePose && k.charge > 0.3) {
-        fireKame();
+        fireKame(pl);
       } else {
         k.lost += dt;
         if (k.lost > 0.8 || hd > 1.6 * sw) k.state = 'idle';
@@ -715,7 +757,7 @@ function updateGestures(dt, now, P) {
         for (let i = 0; i < 2 + k.charge * 4; i++) {
           const a = rand(0, Math.PI * 2), d = rand(0.5, 1) * r;
           spawn({ x: k.pos.x + Math.cos(a) * d, y: k.pos.y + Math.sin(a) * d, life: 0.8, size: rand(1.5, 3.5), color: '150,215,255',
-            target: () => G.kame.pos, speed: rand(300, 600), killR: 12 });
+            target: () => k.pos, speed: rand(300, 600), killR: 12 });
         }
       }
     } else if (k.state === 'cooldown' && k.cd <= 0 && !chargePose) {
@@ -731,11 +773,11 @@ function updateGestures(dt, now, P) {
       for (let i = 0; i < 2 + g.level * 5; i++) {
         const e = Math.random() * 4 | 0;
         const x = e === 0 ? 0 : e === 1 ? W : rand(0, W), y = e === 2 ? H : e === 3 ? 0 : rand(0, H);
-        spawn({ x, y, life: 2, size: rand(1.5, 3.5), color: '200,230,255', target: () => G.genki.pos, speed: rand(500, 1000), killR: R * 0.7 });
+        spawn({ x, y, life: 2, size: rand(1.5, 3.5), color: '200,230,255', target: () => g.pos, speed: rand(500, 1000), killR: R * 0.7 });
       }
     } else if (g.started) {
       g.lost += dt;
-      if (g.level > 0.3 && hm.y > sm.y + 0.1 * sw) throwGenki();
+      if (g.level > 0.3 && hm.y > sm.y + 0.1 * sw) throwGenki(pl);
       else if (g.lost > 1.2) { g.level = Math.max(0, g.level - dt * 1.5); if (g.level === 0) g.started = false; }
     }
 
@@ -748,7 +790,7 @@ function updateGestures(dt, now, P) {
         s.hold += dt; addShake(2 + 8 * s.hold);
         for (let i = 0; i < 4; i++) spawn({ x: sm.x + rand(-1.2, 1.2) * sw, y: sm.y + rand(-0.2, 1.2) * torso, vx: rand(-20, 20), vy: -rand(150, 450),
           life: rand(0.4, 0.8), size: rand(2, 4), color: '255,215,90' });
-        if (s.hold > 1.2) activateSSJ();
+        if (s.hold > 1.2) activateSSJ(pl);
       } else s.hold = Math.max(0, s.hold - dt * 1.5);
     }
 
@@ -759,13 +801,13 @@ function updateGestures(dt, now, P) {
       const dx = (w.x - sh.x) * out;
       if (dx < 0.55 * sw) sp.bentT[i] = now;
       const ext = dx > 1.1 * sw && Math.abs(w.y - sh.y) < 0.5 * sw && ang > 145;
-      if (ext && now - sp.bentT[i] < 0.5 && sp.cd <= 0) { fireSpear(i, out); sp.cd = 1.5; }
+      if (ext && now - sp.bentT[i] < 0.5 && sp.cd <= 0) { fireSpear(pl, i, out); sp.cd = 1.5; }
     });
 
     // --- Sub-Zero: arms crossed in X in front of the chest
     const crossed = wOK && lw.x - rw.x > 0.1 * sw &&
       lw.y > sm.y - 0.4 * sw && rw.y > sm.y - 0.4 * sw && lw.y < sm.y + 0.8 * torso && rw.y < sm.y + 0.8 * torso;
-    if (crossed && f.cd <= 0) { f.hold += dt; if (f.hold > 0.6) { triggerFreeze(); f.cd = 6; f.hold = 0; } }
+    if (crossed && f.cd <= 0) { f.hold += dt; if (f.hold > 0.6) { triggerFreeze(pl); f.cd = 6; f.hold = 0; } }
     else f.hold = Math.max(0, f.hold - dt * 2);
 
     // --- Raiden: one arm up above the head, the other one down
@@ -773,7 +815,7 @@ function updateGestures(dt, now, P) {
     const isDown = w => w.v < 0.4 || w.y > sm.y;
     let arm = -1;
     if (isUp(lw) && isDown(rw)) arm = 0; else if (isUp(rw) && isDown(lw)) arm = 1;
-    if (arm >= 0 && rd.cd <= 0) { rd.hold += dt; if (rd.hold > 0.6) { triggerRaiden(arm); rd.cd = 4; rd.hold = 0; } }
+    if (arm >= 0 && rd.cd <= 0) { rd.hold += dt; if (rd.hold > 0.6) { triggerRaiden(pl, arm); rd.cd = 4; rd.hold = 0; } }
     else rd.hold = Math.max(0, rd.hold - dt * 2);
   }
 
@@ -783,16 +825,33 @@ function updateGestures(dt, now, P) {
     for (let i = 0; i < 3; i++) spawn({ x: sm.x + rand(-1.3, 1.3) * sw, y: sm.y + rand(-0.6, 1.3) * torso, vx: rand(-20, 20), vy: -rand(200, 500),
       life: rand(0.4, 0.9), size: rand(2, 4.5), color: '255,215,90' });
   }
-  wantMask = ssjActive || s.hold > 0.2;
+  pl.wantMask = ssjActive || s.hold > 0.2;
 
-  // HUD progress + charging hum
-  setProgress('kame', k.state === 'charging' ? k.charge : 0);
-  setProgress('genki', g.level);
-  setProgress('ssj', ssjActive ? (s.until - now) / 12 : s.hold / 1.2);
-  setProgress('spear', sp.cd > 0 ? 1 - sp.cd / 1.5 : 0);
-  setProgress('freeze', f.cd > 0 ? 1 - f.cd / 6 : f.hold / 0.6);
-  setProgress('raiden', rd.cd > 0 ? 1 - rd.cd / 4 : rd.hold / 0.6);
-  sfx.hum(Math.max(k.state === 'charging' ? k.charge : 0, g.started ? g.level : 0, ssjActive ? 0 : s.hold / 1.2));
+  // HUD progress + charging hum (the caller merges both players)
+  return {
+    progress: {
+      kame: k.state === 'charging' ? k.charge : 0,
+      genki: g.level,
+      ssj: ssjActive ? (s.until - now) / 12 : s.hold / 1.2,
+      spear: sp.cd > 0 ? 1 - sp.cd / 1.5 : 0,
+      freeze: f.cd > 0 ? 1 - f.cd / 6 : f.hold / 0.6,
+      raiden: rd.cd > 0 ? 1 - rd.cd / 4 : rd.hold / 0.6,
+    },
+    hum: Math.max(k.state === 'charging' ? k.charge : 0, g.started ? g.level : 0, ssjActive ? 0 : s.hold / 1.2),
+  };
+}
+
+function updatePlayers(dt, now, r) {
+  const prog = Object.fromEntries(MOVES.map(m => [m.id, 0]));
+  let hum = 0;
+  for (const pl of players) {
+    pl.P = getPose(pl, r);
+    const o = updateGestures(pl, dt, now);
+    for (const id in prog) prog[id] = Math.max(prog[id], o.progress[id]);
+    hum = Math.max(hum, o.hum);
+  }
+  for (const id in prog) setProgress(id, prog[id]);
+  sfx.hum(hum);
 }
 
 // ============================================================ rendering
@@ -802,13 +861,14 @@ function drawMirrored(src, r) {
   ctx.restore();
 }
 
-function drawAura(r, I, t) {
-  const fresh = maskReady && performance.now() - maskTime < 400;
+function drawAura(pl, r, I, t) {
+  const body = pl.body, M = pl.mask;
+  const fresh = M.ready && performance.now() - M.time < 400;
   if (fresh) {
-    midCtx.clearRect(0, 0, midCanvas.width, midCanvas.height);
-    midCtx.drawImage(maskCanvas, 0, 0, midCanvas.width, midCanvas.height);
-    smallCtx.clearRect(0, 0, smallCanvas.width, smallCanvas.height);
-    smallCtx.drawImage(midCanvas, 0, 0, smallCanvas.width, smallCanvas.height);
+    M.midCtx.clearRect(0, 0, M.mid.width, M.mid.height);
+    M.midCtx.drawImage(M.canvas, 0, 0, M.mid.width, M.mid.height);
+    M.smallCtx.clearRect(0, 0, M.small.width, M.small.height);
+    M.smallCtx.drawImage(M.mid, 0, 0, M.small.width, M.small.height);
     // center of scaling (in un-mirrored local coords)
     const cx = body ? r.x + r.w - body.sm.x : r.w / 2;
     const cy = body ? body.sm.y + body.torso * 0.5 - r.y : r.h / 2;
@@ -818,7 +878,7 @@ function drawAura(r, I, t) {
       const sc = 1.05 + i * 0.08 + 0.03 * Math.sin(t * 22 + i * 2);
       const up = r.h * (0.02 + 0.025 * i) * (1 + 0.3 * Math.sin(t * 17 + i));
       ctx.globalAlpha = clamp(I * (0.95 - i * 0.25) * rand(0.8, 1), 0, 1);
-      ctx.drawImage(i ? smallCanvas : midCanvas, cx - cx * sc, cy - cy * sc - up, r.w * sc, r.h * sc);
+      ctx.drawImage(i ? M.small : M.mid, cx - cx * sc, cy - cy * sc - up, r.w * sc, r.h * sc);
     }
     ctx.restore();
     // redraw the person on top so the aura sits behind them
@@ -828,10 +888,10 @@ function drawAura(r, I, t) {
       personCtx.globalCompositeOperation = 'copy';
       personCtx.drawImage(video, 0, 0, vw, vh);
       personCtx.globalCompositeOperation = 'destination-in';
-      personCtx.drawImage(maskCanvas, 0, 0, vw, vh);
+      personCtx.drawImage(M.canvas, 0, 0, vw, vh);
       drawMirrored(personCanvas, r);
       ctx.save(); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = 0.35 * I;
-      drawMirrored(maskCanvas, r); ctx.restore();
+      drawMirrored(M.canvas, r); ctx.restore();
     }
   } else {
     const x = body ? body.sm.x : W / 2, y = body ? body.sm.y + body.torso * 0.4 : H * 0.55;
@@ -855,12 +915,8 @@ const HAIR_BACK = [[-12, 0.72, 0.3], [13, 0.98, 0.32], [38, 1.25, 0.34], [62, 1.
 // forehead bangs: [base x, base y, angle (deg, canvas), length, width]
 const HAIR_BANGS = [[-0.22, -0.3, 108, 0.24, 0.17], [0.03, -0.34, 88, 0.32, 0.14], [0.25, -0.3, 70, 0.22, 0.16]];
 const CAP = { cy: -0.3, rx: 0.6, ry: 0.64 };
-const hair = {
-  u: 0, ang: 0, c: null, vel: { x: 0, y: 0 }, lastT: 0,
-  locks: [...HAIR_FRONT, ...HAIR_BACK, ...HAIR_BANGS].map(() => ({ a: 0, v: 0, ph: rand(0, 6.28), f: rand(7, 12) })),
-};
 
-function hairFrame(P) {
+function hairFrame(P, body) {
   const le = P[7], re = P[8], ey1 = P[2], ey2 = P[5];
   let c, u, ang;
   if (le.v > 0.4 && re.v > 0.4 && dist(le, re) > 12) {
@@ -872,7 +928,7 @@ function hairFrame(P) {
   return { c, u, ang };
 }
 
-function updateHairPhysics(fr, t, dt, flutter) {
+function updateHairPhysics(hair, fr, t, dt, flutter) {
   if (!hair.c) { hair.c = { ...fr.c }; hair.u = fr.u; hair.ang = fr.ang; }
   const vx = (fr.c.x - hair.c.x) / Math.max(dt, 1e-3) / fr.u, vy = (fr.c.y - hair.c.y) / Math.max(dt, 1e-3) / fr.u;
   hair.vel.x = lerp(hair.vel.x, clamp(vx, -12, 12), 0.35); hair.vel.y = lerp(hair.vel.y, clamp(vy, -12, 12), 0.35);
@@ -924,11 +980,11 @@ function drawLock(bx, by, ang, len, wid, bend, back, u) {
   }
 }
 
-function drawHair(P, t, active) {
-  const fr = hairFrame(P);
+function drawHair(pl, t, active) {
+  const hair = pl.hair, fr = hairFrame(pl.P, pl.body);
   if (!fr) { hair.c = null; return; }
   const dt = clamp(t - (hair.lastT || t), 0, 0.05); hair.lastT = t;
-  const s = G.ssj;
+  const s = pl.G.ssj;
   let grow, alpha = 1, flutter = 0.05;
   if (active) {
     const e = t - s.start, left = s.until - t;
@@ -938,7 +994,7 @@ function drawHair(P, t, active) {
   } else { // powering up: flickering, growing
     grow = (s.hold / 1.2) * 0.7; alpha = Math.random() < 0.5 ? 0.85 : 0.25; flutter = 0.15;
   }
-  updateHairPhysics(fr, t, dt, flutter);
+  updateHairPhysics(hair, fr, t, dt, flutter);
   if (grow <= 0.02) return;
 
   const u = hair.u, L = hair.locks, gw = Math.sqrt(grow);
@@ -988,7 +1044,42 @@ function drawSkeleton(P) {
   ctx.restore();
 }
 
-function render(r, P, now) {
+// small name tag above each head so both players know who is who
+function drawTag(pl) {
+  const b = pl.body; if (!b) return;
+  const x = b.nose.x, y = b.nose.y - b.sw * 1.1;
+  ctx.save();
+  ctx.font = `${Math.round(clamp(b.sw * 0.28, 16, 34))}px Bangers, Impact, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 5; ctx.strokeStyle = '#000'; ctx.strokeText(pl.name, x, y);
+  ctx.fillStyle = pl.color; ctx.fillText(pl.name, x, y);
+  ctx.restore();
+}
+
+function renderPlayer(pl, now) {
+  const P = pl.P, body = pl.body;
+  const s = pl.G.ssj, ssjActive = now < s.until;
+  if (P && (ssjActive || s.hold > 0.4)) drawHair(pl, now, ssjActive);
+  if (ssjActive && P) {
+    if (Math.random() < 0.25 && body) {
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const x = body.sm.x + rand(-1.2, 1.2) * body.sw, y = body.sm.y + rand(-0.5, 1) * body.torso;
+      drawBolt(bolt(x, y, x + rand(-60, 60), y + rand(-60, 60), 30, 5), 0.3, '160,200,255');
+      ctx.restore();
+    }
+  }
+
+  if (game.skeleton && P) drawSkeleton(P);
+  if (game.players > 1) drawTag(pl);
+
+  // charging visuals
+  const k = pl.G.kame;
+  if (k.state === 'charging' && k.charge > 0) drawEnergyBall(k.pos.x, k.pos.y, Math.min(W, H) * (0.015 + 0.06 * k.charge), now);
+  const g = pl.G.genki;
+  if (g.started && g.level > 0) drawGenki(g.pos.x, g.pos.y, genkiR(g.level), now);
+}
+
+function render(r, now) {
   const sx = game.shake ? rand(-1, 1) * game.shake : 0, sy = game.shake ? rand(-1, 1) * game.shake : 0;
   ctx.save();
   ctx.fillStyle = '#05050a'; ctx.fillRect(0, 0, W, H);
@@ -1000,26 +1091,13 @@ function render(r, P, now) {
     g.addColorStop(0, '#1d2a6b'); g.addColorStop(1, '#05050a'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
 
-  const s = G.ssj, ssjActive = now < s.until;
-  const aura = ssjActive ? 1 : s.hold / 1.2;
-  if (aura > 0.05) drawAura(r, aura, now);
-  if (P && (ssjActive || s.hold > 0.4)) drawHair(P, now, ssjActive);
-  if (ssjActive && P) {
-    if (Math.random() < 0.25 && body) {
-      ctx.save(); ctx.globalCompositeOperation = 'lighter';
-      const x = body.sm.x + rand(-1.2, 1.2) * body.sw, y = body.sm.y + rand(-0.5, 1) * body.torso;
-      drawBolt(bolt(x, y, x + rand(-60, 60), y + rand(-60, 60), 30, 5), 0.3, '160,200,255');
-      ctx.restore();
-    }
+  // auras first so neither one covers the other player's hair
+  for (const pl of players) {
+    const s = pl.G.ssj;
+    const aura = now < s.until ? 1 : s.hold / 1.2;
+    if (aura > 0.05) drawAura(pl, r, aura, now);
   }
-
-  if (game.skeleton && P) drawSkeleton(P);
-
-  // charging visuals
-  const k = G.kame;
-  if (k.state === 'charging' && k.charge > 0) drawEnergyBall(k.pos.x, k.pos.y, Math.min(W, H) * (0.015 + 0.06 * k.charge), now);
-  const g = G.genki;
-  if (g.started && g.level > 0) drawGenki(g.pos.x, g.pos.y, genkiR(g.level), now);
+  for (const pl of players) renderPlayer(pl, now);
 
   for (const e of effects) if (e.draw) e.draw();
   drawParts();
@@ -1040,32 +1118,54 @@ function frame(t) {
   const now = t / 1000;
   detect(t);
   const r = camRect();
-  const P = getPose(r);
-  updateGestures(dt, now, P);
+  updatePlayers(dt, now, r);
 
   for (let i = effects.length - 1; i >= 0; i--) if (!effects[i].update(dt)) effects.splice(i, 1);
   for (let i = flashes.length - 1; i >= 0; i--) { flashes[i].t += dt; if (flashes[i].t >= flashes[i].dur) flashes.splice(i, 1); }
   updateParts(dt);
   game.shake = Math.max(0, game.shake - dt * 60) * 0.92;
 
-  render(r, P, now);
+  render(r, now);
 
   if (t - lastStatusT > 250) {
     lastStatusT = t;
-    if (!video.srcObject) setStatus('Modo sin cámara · pulsa 1–6 para ver los efectos', 'warn');
+    if (!video.srcObject) setStatus('Modo sin cámara · pulsa 1–6' + (game.players > 1 ? ' (J1) o Q–Y (J2)' : '') + ' para ver los efectos', 'warn');
     else if (!landmarker) setStatus('Cargando el detector de poses…', 'warn');
-    else if (!P) setStatus('No te veo 👀 · ponte delante de la cámara', 'warn');
-    else if (!body) setStatus('Aléjate un poco: necesito verte los hombros', 'warn');
-    else if (!body.wOK) setStatus('Aléjate un poco más: necesito verte las manos', 'warn');
+    else if (game.players > 1) setStatus(...duoStatus());
+    else if (!players[0].P) setStatus('No te veo 👀 · ponte delante de la cámara', 'warn');
+    else if (!players[0].body) setStatus('Aléjate un poco: necesito verte los hombros', 'warn');
+    else if (!players[0].body.wOK) setStatus('Aléjate un poco más: necesito verte las manos', 'warn');
     else setStatus('¡Te veo! Haz una técnica 🔥', 'ok');
   }
   requestAnimationFrame(frame);
 }
 
+function duoStatus() {
+  const seen = players.filter(pl => pl.P);
+  if (!seen.length) return ['No os veo 👀 · poneos los dos delante de la cámara', 'warn'];
+  if (seen.length < 2) return [`Solo veo a ${seen[0].name} · que entre el otro jugador`, 'warn'];
+  const far = players.find(pl => !pl.body || !pl.body.wOK);
+  if (far) return [`${far.name}: aléjate un poco, necesito verte hombros y manos`, 'warn'];
+  return ['¡Os veo a los dos! J1 a la izquierda, J2 a la derecha 🔥', 'ok'];
+}
+
 // ============================================================ boot
+function setupPlayers() {
+  players = Array.from({ length: game.players }, (_, i) => newPlayer(i));
+  const scores = [...document.querySelectorAll('.score')];
+  scores.forEach((el, i) => {
+    el.hidden = i >= game.players;
+    el.style.setProperty('--pc', PLAYER_COLORS[i]);
+    el.querySelector('small').textContent = game.players > 1 ? 'PUNTOS J' + (i + 1) : 'PUNTOS';
+  });
+  players.forEach((pl, i) => { pl.scoreEl = scores[i].querySelector('b'); });
+  $('#keysP2').hidden = game.players < 2;
+}
+
 function startLoop() {
   if (game.running) return;
   game.running = true;
+  setupPlayers();
   $('#intro').classList.add('hidden');
   $('#hud').hidden = false;
   requestAnimationFrame(t => { lastT = t; frame(t); });
@@ -1092,6 +1192,10 @@ $('#startBtn').onclick = async () => {
   initPose().catch(e => { console.error(e); setStatus('Error cargando el detector: ' + e.message, 'warn'); });
 };
 $('#noCamBtn').onclick = () => { sfx.init(); startLoop(); };
+document.querySelectorAll('#modePick button').forEach(b => b.onclick = () => {
+  game.players = +b.dataset.players;
+  document.querySelectorAll('#modePick button').forEach(o => o.classList.toggle('on', o === b));
+});
 
 function toggleSkeleton() { game.skeleton = !game.skeleton; $('#btnSkel').classList.toggle('off', !game.skeleton); }
 function toggleMute() { const m = sfx.toggleMute(); $('#btnMute').textContent = m ? '🔇' : '🔊'; }
@@ -1099,19 +1203,26 @@ $('#btnSkel').onclick = toggleSkeleton;
 $('#btnMute').onclick = toggleMute;
 $('#btnSkel').classList.add('off');
 
+// Test keys: 1–6 for J1, Q W E R T Y for J2
+const TEST_KEYS = ['123456', 'qwerty'];
+function testMove(pl, n) {
+  const { G, body } = pl, duo = game.players > 1, left = pl.i === 0;
+  const homeX = duo ? (left ? W * 0.3 : W * 0.7) : W * 0.62; // with no body on screen
+  switch (n) {
+    case 0: G.kame.charge = 0.9; G.kame.side = duo && left ? -1 : 1; if (!body) G.kame.pos = { x: homeX, y: H * 0.55 }; fireKame(pl); break;
+    case 1: G.genki.level = 0.9; G.genki.pos = body ? { x: body.sm.x, y: Math.max(genkiR(0.9), body.nose.y - body.sw * 2) } : { x: duo ? homeX : W / 2, y: H * 0.28 }; throwGenki(pl); break;
+    case 2: activateSSJ(pl); break;
+    case 3: duo && !left ? fireSpear(pl, 0, -1) : fireSpear(pl, 1, 1); break;
+    case 4: triggerFreeze(pl); break;
+    case 5: triggerRaiden(pl, 1); break;
+  }
+}
 addEventListener('keydown', e => {
   if (!game.running) return;
   const k = e.key.toLowerCase();
   if (k === 's') return toggleSkeleton();
   if (k === 'm') return toggleMute();
-  switch (k) {
-    case '1': G.kame.charge = 0.9; G.kame.side = 1; if (!body) G.kame.pos = { x: W * 0.62, y: H * 0.55 }; fireKame(); break;
-    case '2': G.genki.level = 0.9; G.genki.pos = body ? { x: body.sm.x, y: Math.max(genkiR(0.9), body.nose.y - body.sw * 2) } : { x: W / 2, y: H * 0.28 }; throwGenki(); break;
-    case '3': activateSSJ(); break;
-    case '4': fireSpear(1, 1); break;
-    case '5': triggerFreeze(); break;
-    case '6': triggerRaiden(1); break;
-  }
+  players.forEach((pl, i) => { const n = TEST_KEYS[i].indexOf(k); if (n >= 0) testMove(pl, n); });
 });
 
 buildPanel();
